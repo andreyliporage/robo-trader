@@ -1,6 +1,6 @@
 # Canal de Abertura — Robô para MetaTrader 5
 
-Robô (Expert Advisor) em MQL5 que opera o **rompimento do canal de abertura**, com alvo em um **segundo canal do mesmo tamanho**. Faz **uma única operação por dia**.
+Robô (Expert Advisor) em MQL5 que opera o **rompimento confirmado do canal de abertura**: o rompimento do canal 1 arma um segundo canal do mesmo tamanho, e só o rompimento desse **canal 2** dispara a entrada, com alvo em um **canal 3**. Faz **uma única operação por dia**.
 
 > ⚠️ **Aviso:** este é um MVP (primeira versão). Teste bastante no Strategy Tester e em conta demo antes de usar em conta real. Resultados passados não garantem resultados futuros, e nenhum robô elimina o risco de perda.
 
@@ -10,24 +10,28 @@ Robô (Expert Advisor) em MQL5 que opera o **rompimento do canal de abertura**, 
 
 1. No horário de abertura (padrão **01:00 da plataforma**, que corresponde a 19h em Brasília), o robô conta as **4 primeiras velas**.
 2. Ele marca a **máxima** e a **mínima** dessas velas. Esse é o **canal 1**.
-3. No primeiro rompimento:
-   - **Rompeu para cima → COMPRA**
-   - **Rompeu para baixo → VENDA**
-4. O **alvo** fica no fim do **canal 2**, que tem o mesmo tamanho do canal 1 e é projetado a partir do lado rompido.
-5. O **stop** fica, por padrão, no lado oposto do canal 1.
-6. Depois disso, o robô não opera mais naquele dia.
+3. Quando o preço **rompe o canal 1** (para cima ou para baixo), o robô **arma o canal 2**: um canal do mesmo tamanho do canal 1, projetado a partir do lado rompido. Isso ainda **não é uma entrada**.
+4. A **entrada** só acontece quando o preço **rompe o canal 2**, na mesma direção:
+   - **Rompeu o canal 2 para cima → COMPRA**
+   - **Rompeu o canal 2 para baixo → VENDA**
+5. Se, antes do canal 2 romper, o preço voltar e romper o canal 1 pelo **lado oposto**, o robô **troca de lado**: descarta o canal 2 antigo e arma um novo canal 2 no novo lado.
+6. O **alvo** fica no fim do **canal 3**, que tem o mesmo tamanho do canal 1 (x multiplicador configurável) e é projetado a partir do canal 2 confirmado.
+7. O **stop** fica, por padrão, no lado oposto do canal 1.
+8. Depois de entrar, o robô não opera mais naquele dia.
 
 ### Exemplo
 
 ```
-  120 ┄┄┄┄┄┄┄┄┄┄┄┄┄  ← ALVO (fim do canal 2)
-      ┆  canal 2  ┆
-  110 ━━━━━━━━━━━━━  ← rompeu aqui → COMPRA
+  130 ┄┄┄┄┄┄┄┄┄┄┄┄┄  ← ALVO (fim do canal 3)
+      ┆  canal 3  ┆
+  120 ━━━━━━━━━━━━━  ← rompeu aqui → COMPRA (entrada)
+      ┃  canal 2  ┃     (armado ao romper o canal 1)
+  110 ━━━━━━━━━━━━━  ← canal 1 rompeu aqui → arma o canal 2 (ainda não entra)
       ┃  canal 1  ┃     (4 primeiras velas)
   100 ━━━━━━━━━━━━━  ← STOP
 ```
 
-Canal de 10 pontos (100 a 110). Rompeu 110, então o robô compra, com alvo em 120 e stop em 100.
+Canal 1 de 10 pontos (100 a 110). Rompeu 110 → arma o canal 2 (110 a 120). Rompeu 120 → o robô compra, com alvo em 130 (fim do canal 3) e stop em 100 (lado oposto do canal 1).
 
 ---
 
@@ -59,16 +63,16 @@ Todos os horários são no **horário da plataforma** (servidor da corretora), e
 ### Entrada
 | Parâmetro | Padrão | O que faz |
 |---|---|---|
-| Tipo de rompimento | Preço rompe | **Preço rompe:** entra assim que o preço passa do canal. **Vela fecha fora:** espera uma vela fechar fora do canal |
+| Tipo de rompimento | Preço rompe | Vale para o rompimento do canal 1 (arma o canal 2) e do canal 2 (entra). **Preço rompe:** confirma assim que o preço passa do canal. **Vela fecha fora:** espera uma vela fechar fora do canal |
 | Folga além do canal | 0 | Pontos a mais além do canal para confirmar o rompimento |
-| Permitir compras / vendas | true / true | Desliga um dos lados. Se o primeiro rompimento for para o lado desligado, o robô não opera no dia |
+| Permitir compras / vendas | true / true | Desliga um dos lados. Se o canal 1 romper para o lado desligado, o robô não arma o canal 2 desse lado (mas continua aguardando o outro lado) |
 | Tamanho mínimo / máximo do canal | 0 / 0 | Ignora o dia se o canal for pequeno ou grande demais (0 = sem filtro) |
 
 ### Alvo
 | Parâmetro | Padrão | O que faz |
 |---|---|---|
-| Usar alvo no fim do canal 2 | true | Liga ou desliga o take profit |
-| Tamanho do canal 2 | 1.0 | Múltiplo do canal 1 (1.5 = alvo 50% mais longe) |
+| Usar alvo no fim do canal 3 | true | Liga ou desliga o take profit |
+| Tamanho do canal 3 | 1.0 | Múltiplo do canal 1 (1.5 = alvo 50% mais longe). O canal 2 é sempre do mesmo tamanho do canal 1 |
 
 ### Stop
 | Parâmetro | Padrão | O que faz |
@@ -90,7 +94,7 @@ Todos os horários são no **horário da plataforma** (servidor da corretora), e
 | Lote / contratos | 1.0 | Quantidade operada |
 | Número mágico | 20260928 | Identifica as ordens do robô. Use números diferentes se rodar em mais de um gráfico |
 | Desvio máximo de preço | 10 | Deslizamento aceito na execução (pontos) |
-| Desenhar canais no gráfico | true | Mostra os canais: azul = canal 1; verde e vermelho = projeções do canal 2 |
+| Desenhar canais no gráfico | true | Mostra os canais: azul = canal 1; verde/vermelho pontilhado = projeções possíveis do canal 2 (antes de armar); verde/vermelho preenchido = canal 2 armado; verde/vermelho pontilhado além dele = canal 3 (alvo) |
 
 ---
 
@@ -116,7 +120,8 @@ No modo teste, o horário limite de entrada é ignorado e você pode remover e r
 O canto superior esquerdo mostra:
 - O dia e o horário de início do canal
 - A máxima, a mínima e o tamanho do canal 1
-- O status: aguardando canal, aguardando rompimento, compra ou venda executada, dia encerrado e o motivo
+- O canal 2, quando já estiver armado (e de que lado)
+- O status: aguardando canal 1, aguardando rompimento do canal 1, aguardando rompimento do canal 2, compra ou venda executada, dia encerrado e o motivo
 
 Os detalhes de cada ação ficam na aba **Experts** (caixa de ferramentas do MT5).
 
@@ -126,7 +131,7 @@ Os detalhes de cada ação ficam na aba **Experts** (caixa de ferramentas do MT5
 
 - **Uma operação por dia de verdade:** o robô confere o histórico, então mesmo que você reinicie o robô ou o MT5, ele não entra duas vezes no mesmo dia.
 - **Conta netting (padrão da B3):** não opere manualmente o mesmo ativo com o robô ligado, porque as posições se misturam.
-- **Ligar o robô com o dia em andamento:** se o preço já estiver fora do canal, ele entra imediatamente, a não ser que o preço já tenha passado do alvo.
+- **Ligar o robô com o dia em andamento:** se o preço já estiver além do canal 2 (não só do canal 1), ele entra imediatamente, a não ser que o preço já tenha passado do alvo (canal 3).
 - **Horário do servidor:** se a corretora mudar o fuso do servidor (horário de verão em outros países), ajuste o horário de início para continuar batendo com 19h de Brasília.
 - **Lote fixo:** ainda não há cálculo de lote por % do capital nem limite de perda diária em dinheiro.
 

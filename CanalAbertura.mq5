@@ -1,19 +1,26 @@
 ﻿//+------------------------------------------------------------------+
 //|                                              CanalAbertura.mq5   |
-//|  MVP - Canal de abertura com projeção de um segundo canal        |
+//|  MVP - Canal de abertura com confirmação em dois estágios        |
 //|                                                                  |
 //|  Lógica:                                                         |
 //|   1. A partir do horário de início (horário da plataforma),      |
 //|      pega as N primeiras velas do tempo gráfico escolhido.       |
 //|   2. Máxima e mínima dessas velas = CANAL 1.                     |
-//|   3. Rompeu para cima -> compra; rompeu para baixo -> vende.     |
-//|   4. Alvo = fim do CANAL 2 (mesmo tamanho do canal 1, projetado  |
-//|      a partir do lado rompido).                                  |
-//|   5. Apenas 1 operação por dia.                                  |
+//|   3. Rompeu o CANAL 1 (cima ou baixo) -> arma o CANAL 2, do      |
+//|      mesmo tamanho do canal 1, projetado a partir do lado        |
+//|      rompido (não entra ainda).                                  |
+//|   4. Rompeu o CANAL 2 na mesma direção -> ENTRA na operação      |
+//|      (compra se foi para cima, vende se foi para baixo).         |
+//|   5. Se o preço cruzar de volta e romper o CANAL 1 pelo lado     |
+//|      oposto antes do canal 2 romper, o robô troca de lado e      |
+//|      re-arma o canal 2 no novo lado.                             |
+//|   6. Alvo = fim do CANAL 3 (mesmo tamanho do canal 1, x          |
+//|      multiplicador, projetado a partir do canal 2).              |
+//|   7. Apenas 1 operação por dia.                                  |
 //+------------------------------------------------------------------+
 #property copyright "MVP Canal de Abertura"
-#property version   "1.00"
-#property description "Canal de abertura: N primeiras velas + projeção de um segundo canal do mesmo tamanho. 1 operação por dia."
+#property version   "2.00"
+#property description "Canal de abertura: rompimento do canal 1 arma o canal 2; rompimento do canal 2 confirma a entrada; alvo no canal 3. 1 operação por dia."
 
 #include <Trade/Trade.mqh>
 
@@ -49,16 +56,16 @@ input int             InpCloseHour       = 23;         // Hora para zerar
 input int             InpCloseMinute     = 50;         // Minuto para zerar
 
 input group "=== Entrada ==="
-input ENUM_ENTRY_MODE InpEntryMode       = ENTRADA_TOQUE; // Tipo de rompimento
+input ENUM_ENTRY_MODE InpEntryMode       = ENTRADA_TOQUE; // Tipo de rompimento (vale para o canal 1 e o canal 2)
 input int             InpBreakoutBuffer  = 0;          // Folga além do canal para confirmar (pontos)
 input bool            InpAllowBuy        = true;       // Permitir compras
 input bool            InpAllowSell       = true;       // Permitir vendas
 input int             InpMinRangePoints  = 0;          // Tamanho mínimo do canal (pontos, 0 = sem filtro)
 input int             InpMaxRangePoints  = 0;          // Tamanho máximo do canal (pontos, 0 = sem filtro)
 
-input group "=== Alvo (canal 2) ==="
-input bool            InpUseTarget       = true;       // Usar alvo no fim do canal 2
-input double          InpTargetMult      = 1.0;        // Tamanho do canal 2 (x tamanho do canal 1)
+input group "=== Alvo (canal 3) ==="
+input bool            InpUseTarget       = true;       // Usar alvo no fim do canal 3
+input double          InpTargetMult      = 1.0;        // Tamanho do canal 3 (x tamanho do canal 1)
 
 input group "=== Stop ==="
 input ENUM_STOP_MODE  InpStopMode        = STOP_LADO_OPOSTO; // Tipo de stop
@@ -89,8 +96,11 @@ datetime g_rangeEnd    = 0;     // fim do canal 1 (fechamento da última vela)
 bool     g_rangeReady  = false; // canal 1 formado
 bool     g_tradeDone   = false; // já operou hoje
 bool     g_dayDone     = false; // dia encerrado (sem mais entradas)
-double   g_high        = 0.0;
-double   g_low         = 0.0;
+double   g_high        = 0.0;   // máxima do canal 1
+double   g_low         = 0.0;   // mínima do canal 1
+int      g_c1BreakDir  = 0;     // lado armado do canal 1 (0 = nenhum, +1 = cima, -1 = baixo)
+double   g_c2High      = 0.0;   // topo do canal 2 armado
+double   g_c2Low       = 0.0;   // fundo do canal 2 armado
 datetime g_lastBarTime = 0;     // controle de nova vela (modo fechamento)
 int      g_failCount   = 0;     // tentativas de envio de ordem que falharam
 string   g_status      = "";
@@ -219,19 +229,50 @@ void DrawChannels()
   {
    if(!InpDrawChannels)
       return;
-   string   d    = TimeToString(g_day, TIME_DATE);
-   datetime tEnd = AtTime(g_day, 23, 59);
-   double   size = (g_high - g_low) * InpTargetMult;
+   string   d      = TimeToString(g_day, TIME_DATE);
+   datetime tEnd   = AtTime(g_day, 23, 59);
+   double   range  = g_high - g_low;
+   double   c3Size = range * InpTargetMult;
 
    // Canal 1 (velas de abertura)
    DrawRect(PREFIX + d + "_C1", g_rangeStart, g_high, tEnd, g_low,
             clrSteelBlue, true, STYLE_SOLID);
 
-   // Projeções do canal 2 (para cima e para baixo)
-   DrawRect(PREFIX + d + "_C2_UP", g_rangeEnd, g_high, tEnd, g_high + size,
-            clrLimeGreen, false, STYLE_DOT);
-   DrawRect(PREFIX + d + "_C2_DN", g_rangeEnd, g_low, tEnd, g_low - size,
-            clrTomato, false, STYLE_DOT);
+   if(g_c1BreakDir == 0)
+     {
+      // Ainda não rompeu: mostra as duas projeções possíveis do canal 2
+      DrawRect(PREFIX + d + "_C2_UP", g_rangeEnd, g_high, tEnd, g_high + range,
+               clrLimeGreen, false, STYLE_DOT);
+      DrawRect(PREFIX + d + "_C2_DN", g_rangeEnd, g_low, tEnd, g_low - range,
+               clrTomato, false, STYLE_DOT);
+      ObjectDelete(0, PREFIX + d + "_C3");
+     }
+   else
+     {
+      // Canal 2 armado (lado definido): apaga a projeção do lado que não armou
+      color clr = (g_c1BreakDir > 0 ? clrLimeGreen : clrTomato);
+      if(g_c1BreakDir > 0)
+        {
+         ObjectDelete(0, PREFIX + d + "_C2_DN");
+         DrawRect(PREFIX + d + "_C2_UP", g_rangeEnd, g_c2Low, tEnd, g_c2High, clr, true, STYLE_SOLID);
+        }
+      else
+        {
+         ObjectDelete(0, PREFIX + d + "_C2_UP");
+         DrawRect(PREFIX + d + "_C2_DN", g_rangeEnd, g_c2Low, tEnd, g_c2High, clr, true, STYLE_SOLID);
+        }
+
+      // Canal 3 (alvo), projetado a partir do canal 2 armado
+      if(InpUseTarget)
+        {
+         if(g_c1BreakDir > 0)
+            DrawRect(PREFIX + d + "_C3", g_rangeEnd, g_c2High, tEnd, g_c2High + c3Size,
+                     clrLimeGreen, false, STYLE_DOT);
+         else
+            DrawRect(PREFIX + d + "_C3", g_rangeEnd, g_c2Low, tEnd, g_c2Low - c3Size,
+                     clrTomato, false, STYLE_DOT);
+        }
+     }
    ChartRedraw();
   }
 
@@ -247,6 +288,9 @@ void ResetDay(datetime day)
    g_dayDone     = false;
    g_high        = 0.0;
    g_low         = 0.0;
+   g_c1BreakDir  = 0;
+   g_c2High      = 0.0;
+   g_c2Low       = 0.0;
    g_lastBarTime = 0;
    g_failCount   = 0;
 
@@ -327,7 +371,7 @@ void BuildRange(datetime now)
       Print(g_status);
       return;
      }
-   g_status = "Canal 1 formado - aguardando rompimento";
+   g_status = "Canal 1 formado - aguardando rompimento do canal 1";
   }
 
 //+------------------------------------------------------------------+
@@ -345,15 +389,16 @@ void OpenTrade(int dir)
    double tp    = 0.0;
    double sl    = 0.0;
 
-   // --- Alvo: fim do canal 2
+   // --- Alvo: fim do canal 3 (projetado a partir do canal 2 armado)
    if(InpUseTarget)
      {
-      tp = NormalizePrice(dir > 0 ? g_high + range * InpTargetMult
-                                  : g_low  - range * InpTargetMult);
+      double c2Bound = (dir > 0 ? g_c2High : g_c2Low);
+      tp = NormalizePrice(dir > 0 ? c2Bound + range * InpTargetMult
+                                  : c2Bound - range * InpTargetMult);
       if((dir > 0 && entry >= tp) || (dir < 0 && entry <= tp))
         {
          g_dayDone = true;
-         g_status  = "Preço já passou do alvo do canal 2 - entrada cancelada";
+         g_status  = "Preço já passou do alvo do canal 3 - entrada cancelada";
          Print(g_status);
          return;
         }
@@ -427,7 +472,33 @@ void OpenTrade(int dir)
   }
 
 //+------------------------------------------------------------------+
-//| Verifica o rompimento do canal 1                                 |
+//| Arma (ou troca de lado) o canal 2 a partir do rompimento do      |
+//| canal 1. dir = +1 rompeu para cima | -1 rompeu para baixo        |
+//+------------------------------------------------------------------+
+void ArmChannel2(int dir)
+  {
+   double range = g_high - g_low;
+   g_c1BreakDir = dir;
+   if(dir > 0)
+     {
+      g_c2Low  = g_high;
+      g_c2High = g_high + range;
+     }
+   else
+     {
+      g_c2High = g_low;
+      g_c2Low  = g_low - range;
+     }
+   g_status = StringFormat("Canal 1 rompeu para %s - canal 2 armado (%s - %s), aguardando rompimento do canal 2",
+                           dir > 0 ? "cima" : "baixo",
+                           DoubleToString(g_c2Low, _Digits), DoubleToString(g_c2High, _Digits));
+   Print(g_status);
+   DrawChannels();
+  }
+
+//+------------------------------------------------------------------+
+//| Verifica o rompimento do canal 1 (arma/troca o canal 2) e do     |
+//| canal 2 (confirma a entrada)                                     |
 //+------------------------------------------------------------------+
 void CheckBreakout(datetime now)
   {
@@ -435,24 +506,23 @@ void CheckBreakout(datetime now)
    if(!IsTestDay() && now >= deadline) // no modo teste o limite de entrada é ignorado
      {
       g_dayDone = true;
-      g_status  = "Horário limite de entrada atingido sem rompimento";
+      g_status  = (g_c1BreakDir == 0)
+                  ? "Horário limite de entrada atingido sem rompimento do canal 1"
+                  : "Horário limite de entrada atingido sem rompimento do canal 2";
+      Print(g_status);
       return;
      }
    if(GetPositionTicket() != 0)
       return; // ainda existe posição aberta (ex.: do dia anterior)
 
    double buffer = InpBreakoutBuffer * _Point;
-   int    dir    = 0;
+   double price  = 0.0;
 
    if(InpEntryMode == ENTRADA_TOQUE)
      {
-      double price = CurrentPrice();
+      price = CurrentPrice();
       if(price <= 0.0)
          return;
-      if(price > g_high + buffer)
-         dir = 1;
-      else if(price < g_low - buffer)
-         dir = -1;
      }
    else // ENTRADA_FECHAMENTO
      {
@@ -465,27 +535,37 @@ void CheckBreakout(datetime now)
       if(closedTime < g_rangeEnd)
          return; // a vela fechada ainda faz parte do canal
 
-      double closePrice = iClose(_Symbol, InpRangeTF, 1);
-      if(closePrice > g_high + buffer)
-         dir = 1;
-      else if(closePrice < g_low - buffer)
-         dir = -1;
+      price = iClose(_Symbol, InpRangeTF, 1);
      }
 
-   if(dir == 0)
-      return;
+   // --- Etapa 1: rompimento do canal 1 (arma o canal 2 ou troca de lado)
+   int rawDir1 = 0;
+   if(price > g_high + buffer)
+      rawDir1 = 1;
+   else if(price < g_low - buffer)
+      rawDir1 = -1;
 
-   // O primeiro rompimento define o lado do dia
-   if((dir > 0 && !InpAllowBuy) || (dir < 0 && !InpAllowSell))
+   if(rawDir1 != 0 && rawDir1 != g_c1BreakDir)
      {
-      g_dayDone = true;
-      g_status  = StringFormat("Rompimento para %s, mas esse lado está desativado - sem operação hoje",
-                               dir > 0 ? "cima" : "baixo");
-      Print(g_status);
-      return;
+      if((rawDir1 > 0 && !InpAllowBuy) || (rawDir1 < 0 && !InpAllowSell))
+        {
+         // Lado desativado: não arma o canal 2 desse lado, mas continua
+         // aguardando (o outro lado ainda pode romper antes do prazo).
+         return;
+        }
+      ArmChannel2(rawDir1);
      }
 
-   OpenTrade(dir);
+   if(g_c1BreakDir == 0)
+      return; // canal 1 ainda não rompeu nenhum lado
+
+   // --- Etapa 2: rompimento do canal 2 (confirma a entrada)
+   bool broke2 = (g_c1BreakDir > 0 ? price > g_c2High + buffer
+                                   : price < g_c2Low  - buffer);
+   if(!broke2)
+      return;
+
+   OpenTrade(g_c1BreakDir);
   }
 
 //+------------------------------------------------------------------+
@@ -568,6 +648,11 @@ void UpdateComment()
                         DoubleToString(g_low, _Digits),
                         DoubleToString(g_high, _Digits),
                         (g_high - g_low) / _Point);
+   if(g_c1BreakDir != 0)
+      s += StringFormat("Canal 2 (%s): %s - %s\n",
+                        g_c1BreakDir > 0 ? "cima" : "baixo",
+                        DoubleToString(g_c2Low, _Digits),
+                        DoubleToString(g_c2High, _Digits));
    s += "Status: " + g_status;
    Comment(s);
   }
