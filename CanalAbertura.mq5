@@ -54,7 +54,7 @@ input int             InpCloseHour       = 23;         // Hora para zerar
 input int             InpCloseMinute     = 50;         // Minuto para zerar
 
 input group "=== Entrada ==="
-input ENUM_ENTRY_MODE InpEntryMode       = ENTRADA_TOQUE; // Tipo de rompimento (vale para o canal 1 e o canal 2)
+input ENUM_ENTRY_MODE InpEntryMode       = ENTRADA_TOQUE; // Tipo de rompimento do canal 1 (a entrada no canal 2 sempre espera o fechamento da vela)
 input int             InpBreakoutBuffer  = 0;          // Folga além do canal para confirmar (pontos)
 input bool            InpAllowBuy        = true;       // Permitir compras
 input bool            InpAllowSell       = true;       // Permitir vendas
@@ -99,7 +99,8 @@ double   g_low         = 0.0;   // mínima do canal 1
 int      g_c1BreakDir  = 0;     // lado armado do canal 1 (0 = nenhum, +1 = cima, -1 = baixo); fixo no dia
 double   g_c2High      = 0.0;   // topo do canal 2 armado
 double   g_c2Low       = 0.0;   // fundo do canal 2 armado
-datetime g_lastBarTime = 0;     // controle de nova vela (modo fechamento)
+datetime g_lastBarTime = 0;     // controle de nova vela (canal 1, modo fechamento)
+datetime g_c2LastBarTime = 0;   // controle de nova vela para confirmar o canal 2 (sempre por fechamento)
 int      g_failCount   = 0;     // tentativas de envio de ordem que falharam
 string   g_status      = "";
 datetime g_testDay     = 0;     // modo teste: dia em que o robô foi ligado
@@ -290,6 +291,7 @@ void ResetDay(datetime day)
    g_c2High      = 0.0;
    g_c2Low       = 0.0;
    g_lastBarTime = 0;
+   g_c2LastBarTime = 0;
    g_failCount   = 0;
 
    if(IsTestDay())
@@ -496,7 +498,8 @@ void ArmChannel2(int dir)
 
 //+------------------------------------------------------------------+
 //| Verifica o rompimento do canal 1 (arma o canal 2, lado fixo no   |
-//| dia) e o rompimento do canal 2 (confirma a entrada)              |
+//| dia, no modo configurado em InpEntryMode) e o rompimento do      |
+//| canal 2 (confirma a entrada, sempre por fechamento de vela)      |
 //+------------------------------------------------------------------+
 void CheckBreakout(datetime now)
   {
@@ -514,56 +517,73 @@ void CheckBreakout(datetime now)
       return; // ainda existe posição aberta (ex.: do dia anterior)
 
    double buffer = InpBreakoutBuffer * _Point;
-   double price  = 0.0;
-
-   if(InpEntryMode == ENTRADA_TOQUE)
-     {
-      price = CurrentPrice();
-      if(price <= 0.0)
-         return;
-     }
-   else // ENTRADA_FECHAMENTO
-     {
-      datetime barTime = iTime(_Symbol, InpRangeTF, 0);
-      if(barTime == g_lastBarTime)
-         return; // só verifica quando abre uma vela nova
-      g_lastBarTime = barTime;
-
-      datetime closedTime = iTime(_Symbol, InpRangeTF, 1);
-      if(closedTime < g_rangeEnd)
-         return; // a vela fechada ainda faz parte do canal
-
-      price = iClose(_Symbol, InpRangeTF, 1);
-     }
 
    // --- Etapa 1: primeiro rompimento do canal 1 arma o canal 2 (lado fixo no dia)
+   // Usa o modo configurado em InpEntryMode (toque ou fechamento de vela).
    if(g_c1BreakDir == 0)
      {
-      int rawDir1 = 0;
-      if(price > g_high + buffer)
-         rawDir1 = 1;
-      else if(price < g_low - buffer)
-         rawDir1 = -1;
+      double price1 = 0.0;
+      bool   have1  = false;
 
-      if(rawDir1 == 0)
-         return;
-
-      // O primeiro rompimento define o lado do dia
-      if((rawDir1 > 0 && !InpAllowBuy) || (rawDir1 < 0 && !InpAllowSell))
+      if(InpEntryMode == ENTRADA_TOQUE)
         {
-         g_dayDone = true;
-         g_status  = StringFormat("Rompimento do canal 1 para %s, mas esse lado está desativado - sem operação hoje",
-                                  rawDir1 > 0 ? "cima" : "baixo");
-         Print(g_status);
-         return;
+         price1 = CurrentPrice();
+         have1  = (price1 > 0.0);
+        }
+      else // ENTRADA_FECHAMENTO
+        {
+         datetime barTime = iTime(_Symbol, InpRangeTF, 0);
+         if(barTime != g_lastBarTime)
+           {
+            g_lastBarTime = barTime;
+            datetime closedTime = iTime(_Symbol, InpRangeTF, 1);
+            if(closedTime >= g_rangeEnd) // ignora vela que ainda faz parte do canal
+              {
+               price1 = iClose(_Symbol, InpRangeTF, 1);
+               have1  = true;
+              }
+           }
         }
 
-      ArmChannel2(rawDir1);
+      if(have1)
+        {
+         int rawDir1 = 0;
+         if(price1 > g_high + buffer)
+            rawDir1 = 1;
+         else if(price1 < g_low - buffer)
+            rawDir1 = -1;
+
+         if(rawDir1 != 0)
+           {
+            // O primeiro rompimento define o lado do dia
+            if((rawDir1 > 0 && !InpAllowBuy) || (rawDir1 < 0 && !InpAllowSell))
+              {
+               g_dayDone = true;
+               g_status  = StringFormat("Rompimento do canal 1 para %s, mas esse lado está desativado - sem operação hoje",
+                                        rawDir1 > 0 ? "cima" : "baixo");
+               Print(g_status);
+               return;
+              }
+            ArmChannel2(rawDir1);
+           }
+        }
      }
 
+   if(g_c1BreakDir == 0)
+      return; // canal 1 ainda não rompeu nenhum lado
+
    // --- Etapa 2: rompimento do canal 2 (confirma a entrada)
-   bool broke2 = (g_c1BreakDir > 0 ? price > g_c2High + buffer
-                                   : price < g_c2Low  - buffer);
+   // Sempre exige que a vela FECHE rompendo o canal 2, mesmo com InpEntryMode
+   // em modo toque — evita abrir a operação só porque o preço tocou o canal
+   // e voltou antes do fechamento da vela.
+   datetime c2BarTime = iTime(_Symbol, InpRangeTF, 0);
+   if(c2BarTime == g_c2LastBarTime)
+      return; // só verifica quando abre uma vela nova
+   g_c2LastBarTime = c2BarTime;
+
+   double closePrice2 = iClose(_Symbol, InpRangeTF, 1);
+   bool   broke2       = (g_c1BreakDir > 0 ? closePrice2 > g_c2High + buffer
+                                            : closePrice2 < g_c2Low  - buffer);
    if(!broke2)
       return;
 
