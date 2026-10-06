@@ -17,14 +17,14 @@ Este arquivo orienta qualquer agente de IA ou desenvolvedor que for ler, alterar
 | Codificação | **UTF-8 com BOM** (`EF BB BF`) — necessário para o MetaEditor exibir acentos corretamente |
 
 ### Estratégia em uma frase
-A partir de um horário fixo (horário da plataforma), o robô marca a máxima e a mínima das **N primeiras velas** (canal 1); o rompimento do canal 1 **arma** um **canal 2 do mesmo tamanho**, projetado a partir do lado rompido; só o rompimento do **canal 2** confirma a **entrada** na direção rompida; se o preço romper o canal 1 pelo lado oposto antes do canal 2 romper, o robô **troca de lado**; o alvo é o fim de um **canal 3** (mesmo tamanho x multiplicador) projetado a partir do canal 2. **Uma única operação por dia.**
+A partir de um horário fixo (horário da plataforma), o robô marca a máxima e a mínima das **N primeiras velas** (canal 1); o primeiro rompimento do canal 1 **arma** um **canal 2 do mesmo tamanho**, projetado a partir do lado rompido, e esse lado fica **fixo para o resto do dia**; só o rompimento do **canal 2** confirma a **entrada** na direção rompida; o alvo é o fim de um **canal 3** (mesmo tamanho x multiplicador) projetado a partir do canal 2. **Uma única operação por dia.**
 
 ### Exemplo numérico
 - 4 velas de M15 a partir de 01:00 → máxima 110, mínima 100 → canal 1 = 10 pontos.
-- Preço rompe 110 → **arma o canal 2** (110 a 120). Ainda não entra.
+- Preço rompe 110 → **arma o canal 2** (110 a 120). Ainda não entra. O lado "cima" fica fixo para o resto do dia.
 - Preço rompe 120 → **compra** (entrada). Canal 3 = 120 a 130 → **alvo em 130**.
 - Stop (padrão) no lado oposto do canal 1 → **100**.
-- Se, antes de romper 120, o preço cair e romper 100 → **troca de lado**: arma o canal 2 para baixo (90 a 100). Se depois romper 90 → **venda**, alvo 80, stop 110.
+- Se, antes de romper 120, o preço cair e voltar a cruzar 100 ou 110, isso **não muda nada**: o robô continua esperando o rompimento de 120 (ou o horário limite, o que vier primeiro).
 
 ---
 
@@ -32,16 +32,15 @@ A partir de um horário fixo (horário da plataforma), o robô marca a máxima e
 
 - O pregão que o usuário opera abre às **19h de Brasília**, que corresponde a **01:00 no horário da plataforma/servidor**. Todo horário no código é **horário do servidor** (`TimeCurrent()`), nunca horário local.
 - Contar as **4 primeiras velas** da abertura e criar um canal com o tamanho delas (canal 1).
-- O rompimento do canal 1 **arma** um **canal 2 do mesmo tamanho**, projetado a partir do lado rompido — isso **não** é a entrada, é só a confirmação de que o canal 2 existe.
+- O **primeiro** rompimento do canal 1 **arma** um **canal 2 do mesmo tamanho**, projetado a partir do lado rompido — isso **não** é a entrada, é só a confirmação de que o canal 2 existe. Esse lado fica **fixo para o resto do dia** (sem troca de lado).
 - A **entrada** só acontece quando o **canal 2** também rompe, na mesma direção (confirmado pelo usuário em 2026-09-29, corrigindo a interpretação anterior de que o canal 2 era o alvo).
-- Se o preço romper o canal 1 pelo lado oposto antes do canal 2 romper, o robô **troca de lado** e re-arma o canal 2 no novo lado (confirmado pelo usuário).
 - O alvo passa a ser o fim de um **canal 3** (mesmo tamanho do canal 1 x multiplicador), projetado a partir do canal 2. O stop continua baseado no canal 1 (confirmado pelo usuário).
 - **Apenas uma operação por dia.**
 - Tudo que o usuário ainda não definiu virou **parâmetro ajustável** (tempo gráfico, tipo de entrada, stop, lote, horários).
 
-### Pontos já confirmados pelo usuário (2026-09-29)
+### Pontos já confirmados pelo usuário (2026-09-29, revisado em 2026-10-05)
 - O canal 2 é um **gatilho de confirmação de entrada**, não o alvo — o alvo é o canal 3.
-- Rompimento do canal 1 pelo lado oposto antes do canal 2 romper → o robô **troca de lado** (não fica preso ao primeiro rompimento do canal 1).
+- **Sem troca de lado:** o primeiro rompimento do canal 1 define o lado do dia de forma definitiva — se o preço depois cruzar para o lado oposto do canal 1, isso é ignorado (removido em 2026-10-05; antes disso o robô trocava de lado).
 - O stop continua calculado em cima do **canal 1**, não do canal 2.
 
 ### Pontos ainda não confirmados pelo usuário
@@ -64,7 +63,7 @@ OnTick
  ├─ se !g_tradeDone && !g_dayDone:
  │    ├─ se !g_rangeReady → BuildRange(now)     (monta o canal 1 quando as N velas fecham)
  │    └─ se g_rangeReady && !g_dayDone → CheckBreakout(now)
- │           ├─ rompeu canal 1 (lado novo ou oposto ao armado) → ArmChannel2(dir)  (arma/troca de lado; ainda não entra)
+ │           ├─ primeiro rompimento do canal 1 → ArmChannel2(dir)  (lado fixo no dia; ainda não entra)
  │           └─ se canal 2 armado e rompeu → OpenTrade(dir)
  └─ UpdateComment()        → painel de texto no gráfico
 ```
@@ -72,11 +71,11 @@ OnTick
 ### Máquina de estados diária
 
 ```
-[Aguardando canal 1] --N velas fechadas--> [Canal 1 formado] --rompimento do canal 1--> [Canal 2 armado]
-        |                                       |    |                                      |   |
-        |                                       |    +--filtro de tamanho falhou--> [Fim]    |   +--rompimento do canal 1 pelo lado oposto--> re-arma o canal 2 (troca de lado)
-        |                                       |                                            |   +--rompimento do canal 2--> [Operação feita]
-        |                                       +--horário limite--> [Dia encerrado]          +--horário limite / alvo já ultrapassado / stop inválido / 3 falhas--> [Dia encerrado]
+[Aguardando canal 1] --N velas fechadas--> [Canal 1 formado] --primeiro rompimento do canal 1--> [Canal 2 armado]
+        |                                       |    |                                                 |
+        |                                       |    +--filtro de tamanho falhou--> [Fim]               +--rompimento do canal 2--> [Operação feita]
+        |                                       |    +--lado desativado--> [Dia encerrado]              +--horário limite / alvo já ultrapassado / stop inválido / 3 falhas--> [Dia encerrado]
+        |                                       +--horário limite--> [Dia encerrado]
         +--(virada do dia do servidor)--> ResetDay reinicia tudo
 ```
 
@@ -85,7 +84,7 @@ Flags que representam esses estados:
 | Variável | Significado |
 |---|---|
 | `g_rangeReady` | Canal 1 já foi calculado para o dia |
-| `g_c1BreakDir` | Lado armado do canal 1 (`0` = nenhum rompimento ainda, `+1`/`-1` = canal 2 armado nesse lado) |
+| `g_c1BreakDir` | Lado armado do canal 1 (`0` = nenhum rompimento ainda, `+1`/`-1` = canal 2 armado nesse lado). Uma vez definido, fica **fixo pelo resto do dia** |
 | `g_tradeDone` | O robô já **entrou** hoje (não entra de novo) |
 | `g_dayDone` | O dia foi encerrado sem operar (ou por falha); não procura mais entradas |
 
@@ -106,8 +105,8 @@ Flags que representam esses estados:
 | `DrawRect(...)` / `DrawChannels()` | Desenha o canal 1 (azul, preenchido). Antes do canal 2 armar: as duas projeções possíveis do canal 2 (verde acima, vermelho abaixo, pontilhados). Depois de armar: o canal 2 armado preenchido no lado correspondente e o canal 3 (alvo) pontilhado além dele. Objetos com prefixo `CA_` + data. |
 | `ResetDay(day)` | Zera o estado do dia (inclusive `g_c1BreakDir`/`g_c2High`/`g_c2Low`); define `g_rangeStart`; consulta o histórico para `g_tradeDone`. |
 | `BuildRange(now)` | Copia as velas a partir de `g_rangeStart`, espera a N-ésima vela **fechar**, calcula máx/mín, aplica filtros de tamanho e desenha. |
-| `ArmChannel2(dir)` | Define/troca o lado armado (`g_c1BreakDir`) e calcula os limites do canal 2 (`g_c2High`/`g_c2Low`) a partir do canal 1 e do lado rompido. Não abre operação. |
-| `CheckBreakout(now)` | Verifica horário limite e posição aberta. Etapa 1: rompimento do canal 1 arma/troca o canal 2 via `ArmChannel2`. Etapa 2: se o canal 2 já está armado, verifica o rompimento dele (toque ou fechamento) e, se romper, chama `OpenTrade`. |
+| `ArmChannel2(dir)` | Define o lado armado (`g_c1BreakDir`), fixo pelo resto do dia, e calcula os limites do canal 2 (`g_c2High`/`g_c2Low`) a partir do canal 1 e do lado rompido. Não abre operação. |
+| `CheckBreakout(now)` | Verifica horário limite e posição aberta. Etapa 1 (só se `g_c1BreakDir == 0`): primeiro rompimento do canal 1 arma o canal 2 via `ArmChannel2`. Etapa 2: se o canal 2 já está armado, verifica o rompimento dele (toque ou fechamento) e, se romper, chama `OpenTrade`. |
 | `OpenTrade(dir)` | Calcula alvo (fim do canal 3, projetado do canal 2) e stop (baseado no canal 1), valida, envia ordem a mercado. `dir = +1` compra, `-1` venda. |
 | `ManagePosition(now)` | Zera a posição no horário configurado e aplica breakeven. |
 | `UpdateComment()` | Painel de status no canto do gráfico. |
@@ -130,8 +129,8 @@ Flags que representam esses estados:
   - **Modo toque (`ENTRADA_TOQUE`)**: a cada tick, `preço > limite + folga` → rompeu para cima; `< limite − folga` → rompeu para baixo.
   - **Modo fechamento (`ENTRADA_FECHAMENTO`)**: só avalia quando abre uma vela nova de `InpRangeTF`; olha o fechamento da vela anterior (índice 1); para o canal 1, ignora velas que ainda fazem parte dele (`closedTime < g_rangeEnd`).
 - `InpBreakoutBuffer` é a folga em **pontos** (`_Point`), aplicada tanto no rompimento do canal 1 quanto no do canal 2.
-- **Etapa 1 — canal 1 arma o canal 2**: se o preço rompe o canal 1 (`g_high`/`g_low`) num lado diferente do atualmente armado (`g_c1BreakDir`), chama `ArmChannel2(dir)`, que recalcula `g_c2High`/`g_c2Low` a partir desse lado. Isso cobre tanto o **primeiro rompimento** (`g_c1BreakDir` estava em 0) quanto a **troca de lado** (rompeu o lado oposto ao já armado). Enquanto o preço só oscila dentro do canal 1 (sem cruzar o lado oposto), o lado armado **não muda**.
-- Se o lado rompido estiver desativado (`InpAllowBuy`/`InpAllowSell` = false), o robô **não arma** o canal 2 nesse lado, mas continua rodando — o outro lado ainda pode romper antes do prazo.
+- **Etapa 1 — canal 1 arma o canal 2 (só a primeira vez)**: enquanto `g_c1BreakDir == 0`, se o preço rompe o canal 1 (`g_high`/`g_low`), chama `ArmChannel2(dir)`, que fixa `g_c1BreakDir` e calcula `g_c2High`/`g_c2Low` a partir desse lado. **Não há troca de lado**: uma vez armado, essa etapa não roda mais no dia, mesmo que o preço depois cruze para o lado oposto do canal 1.
+- Se o lado do primeiro rompimento estiver desativado (`InpAllowBuy`/`InpAllowSell` = false), **o dia é encerrado** — não espera o outro lado romper (mesma regra do MVP original: "o primeiro rompimento define o lado").
 - **Etapa 2 — canal 2 confirma a entrada**: só roda se `g_c1BreakDir != 0`. Se o preço rompe o limite do canal 2 armado (`g_c2High` para cima, `g_c2Low` para baixo) na mesma direção de `g_c1BreakDir`, chama `OpenTrade(g_c1BreakDir)`.
 - Não entra se já existir posição do robô (ex.: posição do dia anterior ainda aberta).
 - Se o horário limite de entrada for atingido antes do canal 2 romper, **o dia é encerrado** (mesmo que o canal 2 já esteja armado).
@@ -297,7 +296,7 @@ Não existe compilador MQL5 fora do MetaTrader (no Linux, só via Wine). **Um ag
 - [ ] No máximo 1 entrada por dia no backtest (conferir no relatório).
 - [ ] Canal 1 desenhado bate com máx/mín das N velas a partir do horário configurado.
 - [ ] Canal 2 só arma **depois** do rompimento do canal 1, e a entrada só acontece no rompimento do canal 2 (nunca no rompimento do canal 1 sozinho).
-- [ ] Rompimento do canal 1 pelo lado oposto ao armado troca o canal 2 de lado corretamente.
+- [ ] Rompimento do canal 1 pelo lado oposto ao armado **não** troca o canal 2 de lado (o lado do dia fica fixo no primeiro rompimento).
 - [ ] TP no fim do canal 3; SL conforme o modo escolhido (ancorado no canal 1).
 - [ ] Posição zerada no horário configurado.
 - [ ] Reiniciar o robô no meio do dia não gera segunda entrada.
@@ -327,7 +326,7 @@ Não existe compilador MQL5 fora do MetaTrader (no Linux, só via Wine). **Um ag
 
 ## 12. Regras para agentes
 
-1. **Não altere a lógica de negócio** (seção 5) sem confirmação do usuário — especialmente "1 operação por dia", "rompimento do canal 1 arma o canal 2 / rompimento do canal 2 confirma a entrada", "troca de lado ao romper o canal 1 pelo lado oposto" e "stop ancorado no canal 1, alvo ancorado no canal 2 (canal 3)".
+1. **Não altere a lógica de negócio** (seção 5) sem confirmação do usuário — especialmente "1 operação por dia", "rompimento do canal 1 arma o canal 2 / rompimento do canal 2 confirma a entrada", "lado do canal 1 é fixo no dia (sem troca de lado, removida em 2026-10-05)" e "stop ancorado no canal 1, alvo ancorado no canal 2 (canal 3)".
 2. Novas regras entram como **inputs com padrão que preserva o comportamento atual**.
 3. Nunca remova o filtro por número mágico nem as validações de stop/alvo.
 4. Atualize este `AGENTS.md` (tabelas de inputs e funções) sempre que mudar o código, e incremente `#property version`.

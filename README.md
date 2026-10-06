@@ -14,10 +14,11 @@ Robô (Expert Advisor) em MQL5 que opera o **rompimento confirmado do canal de a
 4. A **entrada** só acontece quando o preço **rompe o canal 2**, na mesma direção:
    - **Rompeu o canal 2 para cima → COMPRA**
    - **Rompeu o canal 2 para baixo → VENDA**
-5. Se, antes do canal 2 romper, o preço voltar e romper o canal 1 pelo **lado oposto**, o robô **troca de lado**: descarta o canal 2 antigo e arma um novo canal 2 no novo lado.
-6. O **alvo** fica no fim do **canal 3**, que tem o mesmo tamanho do canal 1 (x multiplicador configurável) e é projetado a partir do canal 2 confirmado.
-7. O **stop** fica, por padrão, no lado oposto do canal 1.
-8. Depois de entrar, o robô não opera mais naquele dia.
+5. O **alvo** fica no fim do **canal 3**, que tem o mesmo tamanho do canal 1 (x multiplicador configurável) e é projetado a partir do canal 2 confirmado.
+6. O **stop** fica, por padrão, no lado oposto do canal 1.
+7. Depois de entrar, o robô não opera mais naquele dia.
+
+> O lado definido pelo primeiro rompimento do canal 1 é **fixo para o resto do dia**: se o preço não romper o canal 2 desse lado, o robô não opera, mesmo que o preço depois cruze para o outro lado do canal 1.
 
 ### Exemplo
 

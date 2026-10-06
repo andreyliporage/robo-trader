@@ -10,17 +10,15 @@
 //|      mesmo tamanho do canal 1, projetado a partir do lado        |
 //|      rompido (não entra ainda).                                  |
 //|   4. Rompeu o CANAL 2 na mesma direção -> ENTRA na operação      |
-//|      (compra se foi para cima, vende se foi para baixo).         |
-//|   5. Se o preço cruzar de volta e romper o CANAL 1 pelo lado     |
-//|      oposto antes do canal 2 romper, o robô troca de lado e      |
-//|      re-arma o canal 2 no novo lado.                             |
-//|   6. Alvo = fim do CANAL 3 (mesmo tamanho do canal 1, x          |
+//|      (compra se foi para cima, vende se foi para baixo). O lado  |
+//|      definido pelo primeiro rompimento do canal 1 é fixo no dia. |
+//|   5. Alvo = fim do CANAL 3 (mesmo tamanho do canal 1, x          |
 //|      multiplicador, projetado a partir do canal 2).              |
-//|   7. Apenas 1 operação por dia.                                  |
+//|   6. Apenas 1 operação por dia.                                  |
 //+------------------------------------------------------------------+
 #property copyright "MVP Canal de Abertura"
 #property version   "2.00"
-#property description "Canal de abertura: rompimento do canal 1 arma o canal 2; rompimento do canal 2 confirma a entrada; alvo no canal 3. 1 operação por dia."
+#property description "Canal de abertura: rompimento do canal 1 (lado fixo no dia) arma o canal 2; rompimento do canal 2 confirma a entrada; alvo no canal 3. 1 operação por dia."
 
 #include <Trade/Trade.mqh>
 
@@ -98,7 +96,7 @@ bool     g_tradeDone   = false; // já operou hoje
 bool     g_dayDone     = false; // dia encerrado (sem mais entradas)
 double   g_high        = 0.0;   // máxima do canal 1
 double   g_low         = 0.0;   // mínima do canal 1
-int      g_c1BreakDir  = 0;     // lado armado do canal 1 (0 = nenhum, +1 = cima, -1 = baixo)
+int      g_c1BreakDir  = 0;     // lado armado do canal 1 (0 = nenhum, +1 = cima, -1 = baixo); fixo no dia
 double   g_c2High      = 0.0;   // topo do canal 2 armado
 double   g_c2Low       = 0.0;   // fundo do canal 2 armado
 datetime g_lastBarTime = 0;     // controle de nova vela (modo fechamento)
@@ -472,8 +470,8 @@ void OpenTrade(int dir)
   }
 
 //+------------------------------------------------------------------+
-//| Arma (ou troca de lado) o canal 2 a partir do rompimento do      |
-//| canal 1. dir = +1 rompeu para cima | -1 rompeu para baixo        |
+//| Arma o canal 2 a partir do primeiro rompimento do canal 1.       |
+//| dir = +1 rompeu para cima | -1 rompeu para baixo                 |
 //+------------------------------------------------------------------+
 void ArmChannel2(int dir)
   {
@@ -497,8 +495,8 @@ void ArmChannel2(int dir)
   }
 
 //+------------------------------------------------------------------+
-//| Verifica o rompimento do canal 1 (arma/troca o canal 2) e do     |
-//| canal 2 (confirma a entrada)                                     |
+//| Verifica o rompimento do canal 1 (arma o canal 2, lado fixo no   |
+//| dia) e o rompimento do canal 2 (confirma a entrada)              |
 //+------------------------------------------------------------------+
 void CheckBreakout(datetime now)
   {
@@ -538,26 +536,30 @@ void CheckBreakout(datetime now)
       price = iClose(_Symbol, InpRangeTF, 1);
      }
 
-   // --- Etapa 1: rompimento do canal 1 (arma o canal 2 ou troca de lado)
-   int rawDir1 = 0;
-   if(price > g_high + buffer)
-      rawDir1 = 1;
-   else if(price < g_low - buffer)
-      rawDir1 = -1;
-
-   if(rawDir1 != 0 && rawDir1 != g_c1BreakDir)
+   // --- Etapa 1: primeiro rompimento do canal 1 arma o canal 2 (lado fixo no dia)
+   if(g_c1BreakDir == 0)
      {
+      int rawDir1 = 0;
+      if(price > g_high + buffer)
+         rawDir1 = 1;
+      else if(price < g_low - buffer)
+         rawDir1 = -1;
+
+      if(rawDir1 == 0)
+         return;
+
+      // O primeiro rompimento define o lado do dia
       if((rawDir1 > 0 && !InpAllowBuy) || (rawDir1 < 0 && !InpAllowSell))
         {
-         // Lado desativado: não arma o canal 2 desse lado, mas continua
-         // aguardando (o outro lado ainda pode romper antes do prazo).
+         g_dayDone = true;
+         g_status  = StringFormat("Rompimento do canal 1 para %s, mas esse lado está desativado - sem operação hoje",
+                                  rawDir1 > 0 ? "cima" : "baixo");
+         Print(g_status);
          return;
         }
+
       ArmChannel2(rawDir1);
      }
-
-   if(g_c1BreakDir == 0)
-      return; // canal 1 ainda não rompeu nenhum lado
 
    // --- Etapa 2: rompimento do canal 2 (confirma a entrada)
    bool broke2 = (g_c1BreakDir > 0 ? price > g_c2High + buffer
