@@ -1,6 +1,6 @@
 # Canal de Abertura — Robô para MetaTrader 5
 
-Robô (Expert Advisor) em MQL5 que opera o **rompimento confirmado do canal de abertura**: o rompimento do canal 1 arma um segundo canal do mesmo tamanho, e só o rompimento desse **canal 2** dispara a entrada, com alvo em um **canal 3**. Faz **uma única operação por dia**.
+Robô (Expert Advisor) em MQL5 que opera o **rompimento confirmado do canal de abertura**: o rompimento do canal 1 arma um segundo canal do mesmo tamanho, e só o fechamento de uma vela rompendo esse **canal 2** dispara a entrada, com alvo em um **canal 3** (soma do canal 1 + canal 2). Faz **uma única operação por dia**.
 
 > ⚠️ **Aviso:** este é um MVP (primeira versão). Teste bastante no Strategy Tester e em conta demo antes de usar em conta real. Resultados passados não garantem resultados futuros, e nenhum robô elimina o risco de perda.
 
@@ -11,10 +11,10 @@ Robô (Expert Advisor) em MQL5 que opera o **rompimento confirmado do canal de a
 1. No horário de abertura (padrão **01:00 da plataforma**, que corresponde a 19h em Brasília), o robô conta as **4 primeiras velas**.
 2. Ele marca a **máxima** e a **mínima** dessas velas. Esse é o **canal 1**.
 3. Quando o preço **rompe o canal 1** (para cima ou para baixo), o robô **arma o canal 2**: um canal do mesmo tamanho do canal 1, projetado a partir do lado rompido. Isso ainda **não é uma entrada**.
-4. A **entrada** só acontece quando o preço **rompe o canal 2**, na mesma direção:
-   - **Rompeu o canal 2 para cima → COMPRA**
-   - **Rompeu o canal 2 para baixo → VENDA**
-5. O **alvo** fica no fim do **canal 3**, que tem o mesmo tamanho do canal 1 (x multiplicador configurável) e é projetado a partir do canal 2 confirmado.
+4. A **entrada** só acontece quando uma vela **fecha** rompendo o canal 2, na mesma direção (mesmo com "Tipo de rompimento" = toque — a confirmação final é sempre pelo fechamento da vela):
+   - **Fechou rompendo o canal 2 para cima → COMPRA**
+   - **Fechou rompendo o canal 2 para baixo → VENDA**
+5. O **alvo** fica no fim do **canal 3**, cujo tamanho é a **soma do canal 1 + canal 2** (x multiplicador configurável), projetado a partir do canal 2 confirmado.
 6. O **stop** fica, por padrão, no lado oposto do canal 1.
 7. Depois de entrar, o robô não opera mais naquele dia.
 
@@ -23,16 +23,16 @@ Robô (Expert Advisor) em MQL5 que opera o **rompimento confirmado do canal de a
 ### Exemplo
 
 ```
-  130 ┄┄┄┄┄┄┄┄┄┄┄┄┄  ← ALVO (fim do canal 3)
+  140 ┄┄┄┄┄┄┄┄┄┄┄┄┄  ← ALVO (fim do canal 3 = canal 1 + canal 2)
       ┆  canal 3  ┆
-  120 ━━━━━━━━━━━━━  ← rompeu aqui → COMPRA (entrada)
+  120 ━━━━━━━━━━━━━  ← fechou aqui → COMPRA (entrada)
       ┃  canal 2  ┃     (armado ao romper o canal 1)
   110 ━━━━━━━━━━━━━  ← canal 1 rompeu aqui → arma o canal 2 (ainda não entra)
       ┃  canal 1  ┃     (4 primeiras velas)
   100 ━━━━━━━━━━━━━  ← STOP
 ```
 
-Canal 1 de 10 pontos (100 a 110). Rompeu 110 → arma o canal 2 (110 a 120). Rompeu 120 → o robô compra, com alvo em 130 (fim do canal 3) e stop em 100 (lado oposto do canal 1).
+Canal 1 de 10 pontos (100 a 110). Rompeu 110 → arma o canal 2 (110 a 120, mesmo tamanho do canal 1). Uma vela fecha rompendo 120 → o robô compra, com alvo em 140 (120 + 20, soma do canal 1 + canal 2) e stop em 100 (lado oposto do canal 1).
 
 ---
 
@@ -64,16 +64,16 @@ Todos os horários são no **horário da plataforma** (servidor da corretora), e
 ### Entrada
 | Parâmetro | Padrão | O que faz |
 |---|---|---|
-| Tipo de rompimento | Preço rompe | Vale para o rompimento do canal 1 (arma o canal 2) e do canal 2 (entra). **Preço rompe:** confirma assim que o preço passa do canal. **Vela fecha fora:** espera uma vela fechar fora do canal |
+| Tipo de rompimento | Preço rompe | Vale só para o rompimento do canal 1 (arma o canal 2). **Preço rompe:** confirma assim que o preço passa do canal. **Vela fecha fora:** espera uma vela fechar fora do canal. A entrada (rompimento do canal 2) **sempre** espera o fechamento da vela, independente desse parâmetro |
 | Folga além do canal | 0 | Pontos a mais além do canal para confirmar o rompimento |
-| Permitir compras / vendas | true / true | Desliga um dos lados. Se o canal 1 romper para o lado desligado, o robô não arma o canal 2 desse lado (mas continua aguardando o outro lado) |
+| Permitir compras / vendas | true / true | Desliga um dos lados. Se o primeiro rompimento do canal 1 for para o lado desligado, o robô não opera no dia (não espera o outro lado) |
 | Tamanho mínimo / máximo do canal | 0 / 0 | Ignora o dia se o canal for pequeno ou grande demais (0 = sem filtro) |
 
 ### Alvo
 | Parâmetro | Padrão | O que faz |
 |---|---|---|
 | Usar alvo no fim do canal 3 | true | Liga ou desliga o take profit |
-| Tamanho do canal 3 | 1.0 | Múltiplo do canal 1 (1.5 = alvo 50% mais longe). O canal 2 é sempre do mesmo tamanho do canal 1 |
+| Tamanho do canal 3 | 1.0 | Múltiplo da soma do canal 1 + canal 2 (1.5 = alvo 50% mais longe). O canal 2 é sempre do mesmo tamanho do canal 1 |
 
 ### Stop
 | Parâmetro | Padrão | O que faz |

@@ -9,16 +9,17 @@
 //|   3. Rompeu o CANAL 1 (cima ou baixo) -> arma o CANAL 2, do      |
 //|      mesmo tamanho do canal 1, projetado a partir do lado        |
 //|      rompido (não entra ainda).                                  |
-//|   4. Rompeu o CANAL 2 na mesma direção -> ENTRA na operação      |
-//|      (compra se foi para cima, vende se foi para baixo). O lado  |
-//|      definido pelo primeiro rompimento do canal 1 é fixo no dia. |
-//|   5. Alvo = fim do CANAL 3 (mesmo tamanho do canal 1, x          |
-//|      multiplicador, projetado a partir do canal 2).              |
+//|   4. Rompeu o CANAL 2 (sempre no FECHAMENTO da vela, mesmo no    |
+//|      modo toque) -> ENTRA na operação (compra se foi para cima,  |
+//|      vende se foi para baixo). O lado definido pelo primeiro     |
+//|      rompimento do canal 1 é fixo no dia.                        |
+//|   5. Alvo = fim do CANAL 3, projetado a partir do canal 2 com    |
+//|      tamanho = soma do canal 1 + canal 2 (x multiplicador).      |
 //|   6. Apenas 1 operação por dia.                                  |
 //+------------------------------------------------------------------+
 #property copyright "MVP Canal de Abertura"
-#property version   "2.00"
-#property description "Canal de abertura: rompimento do canal 1 (lado fixo no dia) arma o canal 2; rompimento do canal 2 confirma a entrada; alvo no canal 3. 1 operação por dia."
+#property version   "2.10"
+#property description "Canal de abertura: rompimento do canal 1 (lado fixo no dia) arma o canal 2; fechamento de vela rompendo o canal 2 confirma a entrada; alvo no canal 3 (soma do canal 1 + canal 2). 1 operação por dia."
 
 #include <Trade/Trade.mqh>
 
@@ -63,7 +64,7 @@ input int             InpMaxRangePoints  = 0;          // Tamanho máximo do can
 
 input group "=== Alvo (canal 3) ==="
 input bool            InpUseTarget       = true;       // Usar alvo no fim do canal 3
-input double          InpTargetMult      = 1.0;        // Tamanho do canal 3 (x tamanho do canal 1)
+input double          InpTargetMult      = 1.0;        // Tamanho do canal 3 (x soma do canal 1 + canal 2)
 
 input group "=== Stop ==="
 input ENUM_STOP_MODE  InpStopMode        = STOP_LADO_OPOSTO; // Tipo de stop
@@ -231,7 +232,8 @@ void DrawChannels()
    string   d      = TimeToString(g_day, TIME_DATE);
    datetime tEnd   = AtTime(g_day, 23, 59);
    double   range  = g_high - g_low;
-   double   c3Size = range * InpTargetMult;
+   // Tamanho do canal 3 = soma do canal 1 + canal 2 (x InpTargetMult)
+   double   c3Size = (range + (g_c2High - g_c2Low)) * InpTargetMult;
 
    // Canal 1 (velas de abertura)
    DrawRect(PREFIX + d + "_C1", g_rangeStart, g_high, tEnd, g_low,
@@ -389,12 +391,15 @@ void OpenTrade(int dir)
    double tp    = 0.0;
    double sl    = 0.0;
 
-   // --- Alvo: fim do canal 3 (projetado a partir do canal 2 armado)
+   // --- Alvo: fim do canal 3, projetado a partir do canal 2 armado.
+   // Tamanho do canal 3 = soma do canal 1 + canal 2 (x InpTargetMult).
    if(InpUseTarget)
      {
       double c2Bound = (dir > 0 ? g_c2High : g_c2Low);
-      tp = NormalizePrice(dir > 0 ? c2Bound + range * InpTargetMult
-                                  : c2Bound - range * InpTargetMult);
+      double c2Range = g_c2High - g_c2Low;
+      double c3Size  = (range + c2Range) * InpTargetMult;
+      tp = NormalizePrice(dir > 0 ? c2Bound + c3Size
+                                  : c2Bound - c3Size);
       if((dir > 0 && entry >= tp) || (dir < 0 && entry <= tp))
         {
          g_dayDone = true;
