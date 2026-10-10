@@ -142,6 +142,69 @@ Os detalhes de cada ação ficam na aba **Experts** (caixa de ferramentas do MT5
 
 | Arquivo | Descrição |
 |---|---|
-| `CanalAbertura.mq5` | Código-fonte do robô |
+| `CanalAbertura.mq5` | Código-fonte do robô Canal de Abertura |
+| `SetupCarCas.mq5` | Código-fonte do robô Setup CAR/CAS (veja abaixo) |
 | `README.md` | Este guia de uso |
 | `AGENTS.md` | Documentação técnica detalhada para quem for alterar o código |
+
+---
+
+# Robô 2 — Setup CAR/CAS (`SetupCarCas.mq5`)
+
+Versão **totalmente automatizada** de um setup de canal de abertura com as linhas **CAR** (resistência), **CAS** (suporte), **C1** (projeção) e **TAKE1** (alvo). No setup original, o trader desenha CAR e CAS à mão e só recebe sinais visuais. Aqui o robô calcula tudo sozinho e opera sem você mexer no gráfico.
+
+> ⚠️ Versão 1.00. Teste no Strategy Tester e em conta demo antes da conta real.
+
+## Como funciona
+
+Todas as regras olham o **fechamento da vela** (a vela que acabou de fechar).
+
+1. **CAR e CAS:** a máxima e a mínima das **4 primeiras velas** a partir das 01:00 da plataforma (igual ao canal 1 do Canal de Abertura).
+2. **C1:** na primeira vela que fecha **fora do canal**, o robô projeta o tamanho do canal para aquele lado. Depois disso, **o C1 nunca mais muda** no dia.
+3. **TAKE1:** nos fechamentos seguintes, se o preço fechar além do C1 ou do outro lado do canal, o robô calcula o TAKE1 (o alvo) e gera o sinal **BUY** ou **SELL**.
+4. **Entrada:** a mercado ou com ordem limitada na linha do sinal (você escolhe). **Alvo = TAKE1.** Stop no lado oposto do canal (padrão).
+
+### Exemplo (CAS = 100, CAR = 110, canal de 10 pontos)
+
+| Situação | C1 | Fechamento | TAKE1 | Sinal |
+|---|---|---|---|---|
+| Fechou acima de 110 | **120** | acima de 120 | 140 | **BUY na CAR** |
+| | 120 | abaixo de 100 | 80 | **SELL na CAS** |
+| Fechou abaixo de 100 | **90** | abaixo de 90 | 70 | **SELL na CAS** |
+| | 90 | acima de 110 | 130 | **BUY na CAR** |
+
+```
+  140 ┄┄┄┄┄┄┄┄┄┄┄┄┄  ← TAKE1 (alvo)
+  120 ───────────── ← C1 (fixo no dia)
+  110 ━━━━━━━━━━━━━  ← CAR   (BUY na CAR = compra limitada aqui)
+      ┃   canal   ┃
+  100 ━━━━━━━━━━━━━  ← CAS   (stop da compra)
+```
+
+## Parâmetros principais
+
+Os grupos de **Horários**, **Stop**, **Breakeven** e **modo teste** funcionam igual ao Canal de Abertura. O que é novo:
+
+| Parâmetro | Padrão | O que faz |
+|---|---|---|
+| Tipo de entrada | A mercado | **A mercado:** entra no fechamento da vela do sinal. **Ordem limitada:** deixa a ordem na linha do sinal (CAR para BUY, CAS para SELL) esperando o reteste. Se o preço já estiver na linha, entra a mercado |
+| Permitir 1 virada no dia | false | Desligado: 1 operação por dia (o primeiro sinal define o dia). Ligado: se vier o sinal contrário, o robô fecha a posição (ou cancela a ordem limitada) e entra do outro lado. No máximo 2 operações por dia |
+| Folga para considerar fechamento fora da linha | 0 | Pontos a mais além da linha para valer o fechamento |
+| Usar TAKE1 como alvo | true | Liga ou desliga o take profit |
+| Multiplicador da distância do TAKE1 | 1.0 | 1.0 = regra original do setup |
+| Número mágico | 20261010 | Diferente do Canal de Abertura, para os dois rodarem juntos |
+| Cores, espessura, som | — | Cores de CAR, CAS, C1, TAKE1, canal e textos BUY/SELL; som (`alert.wav`) a cada sinal novo |
+
+## No gráfico
+
+- **Canal** preenchido entre CAS e CAR, com as linhas e os nomes de cada uma.
+- **C1** e **TAKE1** aparecem quando são criados.
+- Um único texto **"BUY na CAR"** ou **"SELL na CAS"** acima do TAKE1, atualizado a cada sinal novo.
+- Nenhum objeto é clicável, e todos são criados uma vez e depois só atualizados.
+- O painel no canto mostra CAR, CAS, C1, TAKE1, o sinal, quantas operações o robô já fez no dia e o status.
+
+## Cuidados
+
+- Os objetos são desenhados pelo robô. **Não precisa (nem adianta) mover as linhas à mão.**
+- Ordens limitadas que não forem executadas são canceladas no horário limite de entrada e no horário de zeragem.
+- **Robô ligado ou reiniciado no meio do dia:** ele reconstrói CAR, CAS, C1, TAKE1 e o último sinal pelas velas que já fecharam. Mas **não entra em sinal antigo**: só opera sinais novos a partir dali. O limite de operações do dia continua valendo, porque ele confere o histórico.
