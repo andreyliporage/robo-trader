@@ -1,6 +1,15 @@
 # AGENTS.md — Robô "Canal de Abertura" (MQL5)
 
-Este arquivo orienta qualquer agente de IA ou desenvolvedor que for ler, alterar ou estender o Expert Advisor `CanalAbertura.mq5`. Leia tudo antes de mudar o código: várias decisões aqui existem para proteger dinheiro real.
+Este arquivo orienta qualquer agente de IA ou desenvolvedor que for ler, alterar ou estender os Expert Advisors deste repositório. Leia tudo antes de mudar o código: várias decisões aqui existem para proteger dinheiro real.
+
+O repositório tem **dois robôs independentes** (arquivos únicos, sem código compartilhado):
+
+| Arquivo | Robô | Seções |
+|---|---|---|
+| `CanalAbertura.mq5` | Canal de Abertura (canal 1 → canal 2 → canal 3) | 1 a 12 |
+| `SetupCarCas.mq5` | Setup CAR/CAS/C1/TAKE1 automatizado | 13 |
+
+As seções 8 (convenções), 9 (compilar e testar) e 12 (regras para agentes) valem para **os dois**. Não altere um robô ao trabalhar no outro.
 
 ---
 
@@ -335,3 +344,132 @@ Não existe compilador MQL5 fora do MetaTrader (no Linux, só via Wine). **Um ag
 3. Nunca remova o filtro por número mágico nem as validações de stop/alvo.
 4. Atualize este `AGENTS.md` (tabelas de inputs e funções) sempre que mudar o código, e incremente `#property version`.
 5. Lembre o usuário de testar em Strategy Tester e conta demo antes de conta real; resultados passados não garantem resultados futuros.
+---
+
+## 13. Robô 2 — `SetupCarCas.mq5` (Setup CAR/CAS automatizado)
+
+### 13.1 Visão geral
+
+| Item | Valor |
+|---|---|
+| Arquivo | `SetupCarCas.mq5` (arquivo único, UTF-8 com BOM) |
+| Versão | 1.00 |
+| Número mágico padrão | `20261010` (diferente do Canal de Abertura, para rodarem juntos) |
+| Prefixo dos objetos | `CC_` + data |
+| Origem | Setup de um trader (prints de prompts + vídeo do YouTube enviados pelo usuário em 2026-10-10). No original, CAR e CAS são **digitados à mão** e o EA só mostra sinais (texto + som). Este robô **automatiza tudo**: calcula CAR/CAS, gera os sinais e opera, **sem interação do usuário com o gráfico** (pedido explícito do usuário). |
+
+### 13.2 Regras do setup (todas no fechamento da vela, shift 1, avaliadas na virada de vela de `InpRangeTF`)
+
+Notação: `dist = CAR − CAS` (o canal), `close1` = fechamento da vela que acabou de fechar, `buf = InpBreakoutBuffer × _Point`.
+
+1. **CAR / CAS** = máxima / mínima das `InpRangeBars` primeiras velas de `InpRangeTF` a partir de `InpStartHour:InpStartMinute` (mesma lógica do `BuildRange` do Canal de Abertura). Como vêm de máx/mín, sempre `CAR ≥ CAS`, então `top = CAR` e `bot = CAS` (o original precisava de `top = max(CAR,CAS)` / `bot = min(...)` porque os valores eram digitados).
+2. **C1** — criado **uma única vez por dia**, no primeiro fechamento fora do canal, e **nunca mais recalculado**:
+   - `close1 > CAR + buf` → `C1 = CAR + dist` (`g_c1Dir = +1`)
+   - `close1 < CAS − buf` → `C1 = CAS − dist` (`g_c1Dir = −1`)
+3. **TAKE1** — avaliado em todo fechamento depois que o C1 existe (inclusive na mesma vela que criou o C1):
+   - C1 abaixo: `close1 < C1 − buf` → `TAKE1 = C1 − |CAR − C1|·mult` (SELL); `close1 > CAR + buf` → `TAKE1 = CAR + |CAR − C1|·mult` (BUY). A segunda regra também cobre o "bugfix" do original (`C1 < CAR e close1 > CAR`).
+   - C1 acima: `close1 > C1 + buf` → `TAKE1 = C1 + |C1 − CAS|·mult` (BUY); `close1 < CAS − buf` → `TAKE1 = CAS − |C1 − CAS|·mult` (SELL).
+   - `mult = InpTargetMult` (1.0 = regra original). Com `mult = 1`, a distância de projeção é sempre `2 × dist`.
+4. **Classificação do sinal** (regras com AND do original):
+   - BUY: `TAKE1 > CAR && TAKE1 > C1` → **BUY na CAR**; senão **BUY na C1**.
+   - SELL: `TAKE1 < CAS && TAKE1 < C1` → **SELL na CAS**; senão **SELL na C1**.
+   - Pela matemática do passo 3, com `mult ≥ 0` os casos "na C1" praticamente não ocorrem; foram mantidos por fidelidade ao setup.
+5. **Anti-repetição**: um sinal só é **novo** quando o lado muda (`dir != g_sigDir`). Fechamentos seguintes no mesmo lado não geram sinal, som nem entrada.
+
+Exemplo (CAS 100, CAR 110): fechou 112 → C1 = 120; fechou 121 → TAKE1 140, **BUY na CAR**; depois fechou 99 → TAKE1 80, **SELL na CAS**. Com C1 abaixo (fechou 98 → C1 = 90): fechou 89 → TAKE1 70, SELL na CAS; fechou 111 → TAKE1 130, BUY na CAR.
+
+### 13.3 Decisões de automação (confirmadas pelo usuário em 2026-10-10)
+
+- **CAR/CAS automáticos** = máx/mín das N primeiras velas (não há input de preço manual).
+- **Tipo de entrada é parâmetro** (`InpEntryType`):
+  - `ENTRADA_MERCADO` (padrão): ordem a mercado no fechamento da vela do sinal.
+  - `ENTRADA_LIMITE`: ordem limitada na linha do sinal (`g_sigLevel` = CAR, CAS ou C1). Se a linha não estiver "atrás" do preço (compra precisa de linha abaixo do ask, venda acima do bid) ou estiver mais perto que `SYMBOL_TRADE_STOPS_LEVEL`, entra **a mercado**. Validade: `ORDER_TIME_DAY` se o ativo aceitar, senão `ORDER_TIME_GTC`; o robô também cancela no horário limite de entrada, no horário de zeragem e na virada do dia.
+- **Alvo = TAKE1** (`InpUseTarget`). Se o preço de entrada já passou do TAKE1, o sinal é ignorado.
+- **Stop** (o setup original não define): padrão **lado oposto do canal** (BUY → CAS, SELL → CAR). Outros modos iguais ao Canal de Abertura (meio do canal, pontos fixos, tamanho do canal × mult). Stop do lado errado ou abaixo da distância mínima → sinal ignorado.
+- **Virada é parâmetro** (`InpAllowReversal`, padrão `false`):
+  - `false`: **1 operação por dia**; o primeiro sinal executado define o dia.
+  - `true`: no máximo **2 entradas por dia**. Sinal contrário fecha a posição aberta (ou cancela a limitada pendente) e entra do outro lado.
+
+### 13.4 Fluxo (`OnTick`)
+
+```
+OnTick
+ ├─ novo dia → ResetDay (zera estado, cancela limitadas de dias anteriores, conta entradas do dia no histórico)
+ ├─ ManagePosition  → zeragem por horário + breakeven (igual ao Canal de Abertura)
+ ├─ ManagePending   → cancela limitada no horário limite / zeragem
+ ├─ g_entryPending  → TryEntry (re-tenta envio; até 3 falhas)
+ └─ se !g_dayDone:
+      ├─ !g_rangeReady → BuildRange (CAR/CAS + reconstrução das velas já fechadas, sem operar)
+      └─ vela nova de InpRangeTF → OnNewBar → EvaluateClose(close1, live=true)
+                                       ├─ cria C1 (1x)
+                                       ├─ calcula TAKE1 / classifica sinal
+                                       └─ sinal novo → desenha, som, TryEntry
+```
+
+### 13.5 Funções específicas
+
+| Função | Responsabilidade |
+|---|---|
+| `MaxEntries()` | 1 sem virada, 2 com virada. |
+| `EntryWindowClosed(now)` | Horário limite de entrada atingido (ignorado no dia do modo teste). |
+| `GetPendingTicket()` / `DeletePendingOrders(olderThan)` | Ordens pendentes do robô (ativo + mágico). `olderThan > 0` apaga só as criadas antes dessa data. |
+| `CountEntriesSince(from, to)` | Negócios de entrada + ordens pendentes do robô no intervalo. Base do limite diário, sobrevive a reinício. |
+| `BuildRange(now)` | Define CAR/CAS, aplica filtros de tamanho e **reconstrói** C1/TAKE1/sinal com as velas que já fecharam (`EvaluateClose(..., live=false)`), para o robô ligado no meio do dia não ficar com estado vazio. Sinais reconstruídos **não** geram entrada nem som. |
+| `OnNewBar(now)` | Chama `EvaluateClose` para a vela shift 1, se ela for posterior ao canal. |
+| `EvaluateClose(close1, t1, now, live)` | Regras 13.2 (C1, TAKE1, classificação, anti-repetição). Com `live = true`, toca som e chama `TryEntry`. Tem declaração antecipada no topo do arquivo. |
+| `TryEntry(now)` | Checa horário e limite diário; trata posição aberta (mesmo lado → nada; outro lado → fecha para virada; de dia anterior → ignora); cancela limitada antiga; chama `PlaceEntry`. |
+| `PlaceEntry(dir)` | Calcula entrada (mercado ou limitada), TP = TAKE1, SL conforme `InpStopMode`, valida e envia. Retorna `ENTRY_OK`, `ENTRY_SKIP` (sinal descartado) ou `ENTRY_FAIL` (re-tenta). |
+| `ManagePending(now)` | Cancela limitada no horário limite de entrada ou no horário de zeragem. |
+| `DrawAll()` / `DrawLine` / `DrawText` / `DrawRect` | Canal (retângulo preenchido), linhas CAR/CAS/C1/TAKE1 (`OBJ_TREND` do início do canal até 23:59, com nome e preço) e **um único** texto de sinal por dia acima do TAKE1. Objetos criados 1 vez e depois só atualizados; `SELECTABLE = false`, `SELECTED = false`, `HIDDEN = true`. |
+
+### 13.6 Variáveis globais específicas
+
+| Variável | Uso |
+|---|---|
+| `g_car` / `g_cas` | Resistência / suporte (máx / mín do canal) |
+| `g_c1Dir` / `g_c1` | Lado e preço da C1 (0 = ainda não criada); fixos no dia |
+| `g_sigDir` / `g_take1` / `g_sigLevel` / `g_sigName` / `g_sigTime` | Sinal ativo: lado, alvo, linha de entrada, nome da linha, vela do sinal |
+| `g_entries` | Entradas do dia (para `MaxEntries()`) |
+| `g_entryPending` / `g_failCount` | Sinal aguardando envio / falhas de envio desse sinal |
+
+### 13.7 Inputs específicos (os demais são iguais aos do Canal de Abertura, seção 6)
+
+| Input | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `InpEntryType` | ENUM_ENTRY_TYPE | ENTRADA_MERCADO | Mercado ou limitada na linha do sinal |
+| `InpAllowReversal` | bool | false | Permitir 1 virada no dia (máx. 2 entradas) |
+| `InpUseTarget` | bool | true | TAKE1 como take profit |
+| `InpTargetMult` | double | 1.0 | Multiplicador da distância de projeção do TAKE1 |
+| `InpBreakoutBuffer` | int | 0 | Folga (pontos) para valer fechamento fora de qualquer linha (CAR, CAS, C1) |
+| `InpMagic` | ulong | 20261010 | Número mágico |
+| `InpDrawObjects` | bool | true | Desenhar objetos |
+| `InpColorCAR` / `InpColorCAS` / `InpColorC1` / `InpColorTake1` | color | azul / laranja / dourado / magenta | Cores das linhas |
+| `InpColorChannel` | color | `C'25,45,70'` | Preenchimento do canal |
+| `InpLineWidth` | int | 2 | Espessura das linhas |
+| `InpColorBuy` / `InpColorSell` | color | verde / vermelho | Cor do texto do sinal |
+| `InpUseSound` / `InpSoundFile` | bool / string | true / `alert.wav` | Som em sinal novo (ignorado no Strategy Tester) |
+
+Não existe `InpEntryMode` (toque) neste robô: tudo é por fechamento de vela, como no setup original.
+
+### 13.8 Checklist específico
+
+- [ ] CAR/CAS batem com máx/mín das N velas; canal e linhas desenhados sem duplicar objetos.
+- [ ] C1 criado no primeiro fechamento fora do canal e **nunca** muda no dia.
+- [ ] TAKE1 e rótulo do sinal batem com a tabela do exemplo 13.2.
+- [ ] Sem virada: no máximo 1 entrada por dia. Com virada: no máximo 2, e a virada fecha a posição anterior antes de entrar.
+- [ ] Limitada: ordem na linha certa (CAR para BUY, CAS para SELL); cancelada no horário limite, na zeragem e no dia seguinte.
+- [ ] Ligar o robô no meio do dia reconstrói o estado e **não** entra em sinal antigo.
+
+### 13.9 Pontos ainda não confirmados pelo usuário
+
+1. Tempo gráfico real das velas (padrão provisório M15) e se o canal do setup também usa 4 velas a partir das 01:00.
+2. Qual tipo de entrada funciona melhor (mercado × limitada) e se a virada fica ligada — decidir com backtest.
+3. Stop definitivo (o setup original não define).
+4. Ativo, lote, horário limite de entrada e horário de zeragem.
+
+### 13.10 Limitações conhecidas
+
+- **Conta netting:** operações manuais ou de outro robô no mesmo ativo se misturam com a posição (o Canal de Abertura e este robô **não devem operar o mesmo ativo na mesma conta netting**).
+- Sem trailing stop, sem lote por % de risco, sem limite financeiro diário.
+- O texto do sinal mostra só o último sinal do dia (um único objeto, como pedido no setup).
+- Reinício com virada ligada: o lado do último sinal é reconstruído pelas velas; se a posição do primeiro sinal já tiver sido encerrada, um sinal contrário novo ainda pode gerar a 2ª entrada (comportamento esperado).
